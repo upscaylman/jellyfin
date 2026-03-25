@@ -33,7 +33,7 @@ namespace MediaBrowser.Controller.Entities
         public Video()
         {
             AdditionalParts = Array.Empty<string>();
-            LocalAlternateVersions = Array.Empty<string>();
+            LocalAlternateVersions = Array.Empty<LinkedChild>();
             SubtitleFiles = Array.Empty<string>();
             AudioFiles = Array.Empty<string>();
             LinkedAlternateVersions = Array.Empty<LinkedChild>();
@@ -44,7 +44,8 @@ namespace MediaBrowser.Controller.Entities
 
         public string[] AdditionalParts { get; set; }
 
-        public string[] LocalAlternateVersions { get; set; }
+        [JsonConverter(typeof(JsonLinkedChildArrayConverter))]
+        public LinkedChild[] LocalAlternateVersions { get; set; }
 
         public LinkedChild[] LinkedAlternateVersions { get; set; }
 
@@ -161,6 +162,12 @@ namespace MediaBrowser.Controller.Entities
 
         [JsonIgnore]
         public override bool HasLocalAlternateVersions => LocalAlternateVersions.Length > 0;
+
+        /// <summary>
+        /// Gets the local alternate version file paths.
+        /// </summary>
+        [JsonIgnore]
+        public IEnumerable<string> LocalAlternateVersionPaths => LocalAlternateVersions.Select(i => i.Path);
 
         public static IRecordingsManager RecordingsManager { get; set; }
 
@@ -366,7 +373,10 @@ namespace MediaBrowser.Controller.Entities
 
         public IEnumerable<Guid> GetLocalAlternateVersionIds()
         {
-            return LocalAlternateVersions.Select(i => LibraryManager.GetNewItemId(i, typeof(Video)));
+            return LocalAlternateVersions
+                .Select(GetLinkedChild)
+                .Where(i => i is not null)
+                .Select(i => i.Id);
         }
 
         private string GetUserDataKey(string providerId)
@@ -416,7 +426,7 @@ namespace MediaBrowser.Controller.Entities
                     updateType |= ItemUpdateType.MetadataImport;
                 }
 
-                if (!LocalAlternateVersions.SequenceEqual(newVideo.LocalAlternateVersions, StringComparer.Ordinal))
+                if (!LocalAlternateVersions.Select(i => i.Path).SequenceEqual(newVideo.LocalAlternateVersions.Select(i => i.Path), StringComparer.Ordinal))
                 {
                     LocalAlternateVersions = newVideo.LocalAlternateVersions;
                     updateType |= ItemUpdateType.MetadataImport;
@@ -454,7 +464,7 @@ namespace MediaBrowser.Controller.Entities
                     RefreshLinkedAlternateVersions();
 
                     var tasks = LocalAlternateVersions
-                        .Select(i => RefreshMetadataForOwnedVideo(options, false, i, cancellationToken));
+                        .Select(i => RefreshMetadataForOwnedVideo(options, false, i.Path, cancellationToken));
 
                     await Task.WhenAll(tasks).ConfigureAwait(false);
                 }
