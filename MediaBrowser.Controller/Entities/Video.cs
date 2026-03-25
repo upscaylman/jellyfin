@@ -260,7 +260,7 @@ namespace MediaBrowser.Controller.Entities
                 {
                     if (callstack.Contains(video.Id))
                     {
-                        return video.LinkedAlternateVersions.Length + video.LocalAlternateVersions.Length + 1;
+                        return video.CountValidMediaSources();
                     }
 
                     callstack.Add(video.Id);
@@ -268,7 +268,15 @@ namespace MediaBrowser.Controller.Entities
                 }
             }
 
-            return LinkedAlternateVersions.Length + LocalAlternateVersions.Length + 1;
+            return CountValidMediaSources();
+        }
+
+        private int CountValidMediaSources()
+        {
+            var linkedCount = GetLinkedAlternateVersions().Count();
+            var localCount = GetLocalAlternateVersionIds()
+                .Count(id => LibraryManager.GetItemById(id) is not null);
+            return linkedCount + localCount + 1;
         }
 
         public override List<string> GetUserDataKeys()
@@ -537,28 +545,55 @@ namespace MediaBrowser.Controller.Entities
                 (this, MediaSourceType.Default)
             };
 
-            list.AddRange(GetLinkedAlternateVersions().Select(i => ((BaseItem)i, MediaSourceType.Grouping)));
+            // Track all item IDs to prevent duplicates across linked and local alternates
+            var seenIds = new HashSet<Guid> { Id };
+
+            foreach (var linked in GetLinkedAlternateVersions())
+            {
+                if (seenIds.Add(linked.Id))
+                {
+                    list.Add(((BaseItem)linked, MediaSourceType.Grouping));
+                }
+            }
 
             if (!string.IsNullOrEmpty(PrimaryVersionId))
             {
                 if (LibraryManager.GetItemById(PrimaryVersionId) is Video primary)
                 {
-                    var existingIds = list.Select(i => i.Item1.Id).ToList();
-                    list.Add((primary, MediaSourceType.Grouping));
-                    list.AddRange(primary.GetLinkedAlternateVersions().Where(i => !existingIds.Contains(i.Id)).Select(i => ((BaseItem)i, MediaSourceType.Grouping)));
+                    if (seenIds.Add(primary.Id))
+                    {
+                        list.Add((primary, MediaSourceType.Grouping));
+                    }
+
+                    foreach (var linked in primary.GetLinkedAlternateVersions())
+                    {
+                        if (seenIds.Add(linked.Id))
+                        {
+                            list.Add(((BaseItem)linked, MediaSourceType.Grouping));
+                        }
+                    }
                 }
             }
 
-            var localAlternates = list
-                .SelectMany(i =>
+            // Collect local alternates from all items seen so far
+            var currentItems = list.ToList();
+            foreach (var (item, _) in currentItems)
+            {
+                if (item is Video video)
                 {
-                    return i.Item1 is Video video ? video.GetLocalAlternateVersionIds() : Enumerable.Empty<Guid>();
-                })
-                .Select(LibraryManager.GetItemById)
-                .Where(i => i is not null)
-                .ToList();
-
-            list.AddRange(localAlternates.Select(i => (i, MediaSourceType.Default)));
+                    foreach (var localId in video.GetLocalAlternateVersionIds())
+                    {
+                        if (seenIds.Add(localId))
+                        {
+                            var localItem = LibraryManager.GetItemById(localId);
+                            if (localItem is not null)
+                            {
+                                list.Add((localItem, MediaSourceType.Default));
+                            }
+                        }
+                    }
+                }
+            }
 
             return list;
         }
